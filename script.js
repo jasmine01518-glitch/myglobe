@@ -9,6 +9,9 @@ const CAMERA_DISTANCE = 6.2;
 const MIN_ZOOM = 3.8;
 const MAX_ZOOM = 10;
 const STORAGE_KEY = 'globe-archive-v1';
+const MAP_WIDTH = 4096;
+const MAP_HEIGHT = 2048;
+const HIGH_RES_GEOJSON_URL = 'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson';
 
 // ── Location Dataset (30 major travel cities) ──────────────
 const LOCATIONS = [
@@ -47,7 +50,7 @@ const LOCATIONS = [
 // ── Land Polygon Data ──────────────────────────────────────
 // Simplified continental outlines as [lng, lat] arrays.
 // Embedded directly so the texture works offline / file:// with zero CDN deps.
-const LAND_POLYGONS = [
+const FALLBACK_LAND_POLYGONS = [
   // Africa
   [[-6,36],[10,37],[25,32],[35,30],[38,22],[43,12],[51,11],
    [43,-2],[40,-5],[38,-18],[36,-25],[28,-35],[18,-35],[12,-34],
@@ -125,11 +128,13 @@ let pendingFiles = [];                    // files selected but not saved
 let lightboxPhotoId = null;              // currently open photo id
 let selectedLocation = null;             // confirmed location from dropdown
 let globeMaterial  = null;               // ref so async texture can update it
+let globeUniforms = null;
 
 // ── Entry Point ────────────────────────────────────────────
 function init() {
   setupScene();
   createGlobe();
+  upgradeTextureWithHighResData();
   setupLighting();
   setupControls();
 
@@ -188,12 +193,45 @@ function setupScene() {
 function createGlobe() {
   const geo = new THREE.SphereGeometry(GLOBE_RADIUS, 72, 72);
 
-  // Build map texture synchronously from embedded polygon data — no network needed.
-  globeMaterial = new THREE.MeshPhongMaterial({
-    color:    0xffffff, // neutral white so texture colors render as-is
-    specular: 0x686864,
-    shininess: 5,
-    map: buildMapTexture(),
+  const textureSet = buildMapTexture(FALLBACK_LAND_POLYGONS);
+  globeUniforms = {
+    uSharpMap: { value: textureSet.sharp },
+    uBlurMap: { value: textureSet.blur },
+    uBlurStrength: { value: 0.9 },
+  };
+  globeMaterial = new THREE.ShaderMaterial({
+    uniforms: globeUniforms,
+    vertexShader: `
+      varying vec2 vUv;
+      varying vec3 vWorldNormal;
+      varying vec3 vViewDir;
+      void main() {
+        vUv = uv;
+        vec4 worldPos = modelMatrix * vec4(position, 1.0);
+        vWorldNormal = normalize(mat3(modelMatrix) * normal);
+        vViewDir = normalize(cameraPosition - worldPos.xyz);
+        gl_Position = projectionMatrix * viewMatrix * worldPos;
+      }
+    `,
+    fragmentShader: `
+      varying vec2 vUv;
+      varying vec3 vWorldNormal;
+      varying vec3 vViewDir;
+      uniform sampler2D uSharpMap;
+      uniform sampler2D uBlurMap;
+      uniform float uBlurStrength;
+      void main() {
+        vec4 sharpCol = texture2D(uSharpMap, vUv);
+        vec4 blurCol = texture2D(uBlurMap, vUv);
+        float ndv = clamp(dot(normalize(vWorldNormal), normalize(vViewDir)), 0.0, 1.0);
+        float edge = 1.0 - ndv;
+        float blurMix = smoothstep(0.18, 0.82, edge) * uBlurStrength;
+        float vignette = smoothstep(1.0, 0.25, edge);
+        vec3 color = mix(sharpCol.rgb, blurCol.rgb, blurMix);
+        color = mix(color * 0.95, color, vignette);
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `,
   });
 
   globeGroup.add(new THREE.Mesh(geo, globeMaterial));
@@ -210,22 +248,22 @@ function createGlobe() {
   globeGroup.add(new THREE.Mesh(haloGeo, haloMat));
 }
 
-// Draws ocean + continents + lat/lng grid onto a 2048×1024 canvas and returns
-// a THREE.CanvasTexture. Fully synchronous — works offline and from file://.
-function buildMapTexture() {
-  const W = 2048, H = 1024;
+// Draws ocean + continents + lat/lng grid onto a 4096×2048 canvas and returns
+// sharp + blur textures for edge-fade rendering.
+function buildMapTexture(polygons) {
+  const W = MAP_WIDTH, H = MAP_HEIGHT;
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
 
   // ── Ocean base ──
-  ctx.fillStyle = '#eceae7';
+  ctx.fillStyle = '#f4f3f1';
   ctx.fillRect(0, 0, W, H);
 
   // ── Continents: trace all polygons in one batched fill ──
   ctx.fillStyle = '#bebcb8';
   ctx.beginPath();
-  for (const poly of LAND_POLYGONS) {
+  for (const poly of polygons) {
     poly.forEach(([lng, lat], i) => {
       const x = ((lng + 180) / 360) * W;
       const y = ((90  - lat) / 180) * H;
@@ -236,13 +274,13 @@ function buildMapTexture() {
   ctx.fill('evenodd');
 
   // ── Latitude / longitude grid ──
-  ctx.strokeStyle = 'rgba(148, 145, 140, 0.30)';
-  ctx.lineWidth   = 1.0;
-  for (let lat = -80; lat <= 80; lat += 20) {
+  ctx.strokeStyle = 'rgba(143, 140, 136, 0.22)';
+  ctx.lineWidth   = 0.9;
+  for (let lat = -80; lat <= 80; lat += 15) {
     const y = ((90 - lat) / 180) * H;
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
-  for (let lng = -160; lng <= 160; lng += 20) {
+  for (let lng = -165; lng <= 165; lng += 15) {
     const x = ((lng + 180) / 360) * W;
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
   }
@@ -251,9 +289,51 @@ function buildMapTexture() {
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
   });
 
-  const tex = new THREE.CanvasTexture(cv);
-  tex.needsUpdate = true;
-  return tex;
+  const blurCv = document.createElement('canvas');
+  blurCv.width = W; blurCv.height = H;
+  const blurCtx = blurCv.getContext('2d');
+  blurCtx.filter = 'blur(7px)';
+  blurCtx.drawImage(cv, 0, 0);
+  blurCtx.filter = 'none';
+
+  const sharpTex = new THREE.CanvasTexture(cv);
+  sharpTex.needsUpdate = true;
+  sharpTex.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+  const blurTex = new THREE.CanvasTexture(blurCv);
+  blurTex.needsUpdate = true;
+  blurTex.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+
+  return { sharp: sharpTex, blur: blurTex };
+}
+
+async function upgradeTextureWithHighResData() {
+  try {
+    const resp = await fetch(HIGH_RES_GEOJSON_URL);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const geojson = await resp.json();
+    const polygons = extractPolygonsFromGeoJSON(geojson);
+    if (!polygons.length) return;
+    const textureSet = buildMapTexture(polygons);
+    globeUniforms.uSharpMap.value = textureSet.sharp;
+    globeUniforms.uBlurMap.value = textureSet.blur;
+  } catch (err) {
+    console.warn('High-resolution map fetch failed, using fallback polygons.', err);
+  }
+}
+
+function extractPolygonsFromGeoJSON(geojson) {
+  const out = [];
+  if (!geojson?.features) return out;
+  geojson.features.forEach(feature => {
+    const geom = feature.geometry;
+    if (!geom) return;
+    if (geom.type === 'Polygon') {
+      geom.coordinates.forEach(ring => out.push(ring));
+    } else if (geom.type === 'MultiPolygon') {
+      geom.coordinates.forEach(poly => poly.forEach(ring => out.push(ring)));
+    }
+  });
+  return out;
 }
 
 // (Dead code kept as stub so nothing breaks if called externally)
