@@ -9,6 +9,9 @@ const CAMERA_DISTANCE = 6.2;
 const MIN_ZOOM = 3.8;
 const MAX_ZOOM = 10;
 const STORAGE_KEY = 'globe-archive-v1';
+const MAP_WIDTH = 4096;
+const MAP_HEIGHT = 2048;
+const WORLD_TEXTURE_URL = 'https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-gray.jpg';
 
 // ── Location Dataset (30 major travel cities) ──────────────
 const LOCATIONS = [
@@ -47,7 +50,7 @@ const LOCATIONS = [
 // ── Land Polygon Data ──────────────────────────────────────
 // Simplified continental outlines as [lng, lat] arrays.
 // Embedded directly so the texture works offline / file:// with zero CDN deps.
-const LAND_POLYGONS = [
+const FALLBACK_LAND_POLYGONS = [
   // Africa
   [[-6,36],[10,37],[25,32],[35,30],[38,22],[43,12],[51,11],
    [43,-2],[40,-5],[38,-18],[36,-25],[28,-35],[18,-35],[12,-34],
@@ -125,11 +128,13 @@ let pendingFiles = [];                    // files selected but not saved
 let lightboxPhotoId = null;              // currently open photo id
 let selectedLocation = null;             // confirmed location from dropdown
 let globeMaterial  = null;               // ref so async texture can update it
+let globeMesh = null;
 
 // ── Entry Point ────────────────────────────────────────────
 function init() {
   setupScene();
   createGlobe();
+  loadWorldTextureWithFallback();
   setupLighting();
   setupControls();
 
@@ -187,16 +192,14 @@ function setupScene() {
 // ── Globe Geometry ─────────────────────────────────────────
 function createGlobe() {
   const geo = new THREE.SphereGeometry(GLOBE_RADIUS, 72, 72);
-
-  // Build map texture synchronously from embedded polygon data — no network needed.
   globeMaterial = new THREE.MeshPhongMaterial({
-    color:    0xffffff, // neutral white so texture colors render as-is
+    color: 0xffffff,
     specular: 0x686864,
     shininess: 5,
-    map: buildMapTexture(),
   });
 
-  globeGroup.add(new THREE.Mesh(geo, globeMaterial));
+  globeMesh = new THREE.Mesh(geo, globeMaterial);
+  globeGroup.add(globeMesh);
 
   // Atmosphere halo
   const haloGeo = new THREE.SphereGeometry(GLOBE_RADIUS * 1.045, 64, 64);
@@ -210,22 +213,21 @@ function createGlobe() {
   globeGroup.add(new THREE.Mesh(haloGeo, haloMat));
 }
 
-// Draws ocean + continents + lat/lng grid onto a 2048×1024 canvas and returns
-// a THREE.CanvasTexture. Fully synchronous — works offline and from file://.
-function buildMapTexture() {
-  const W = 2048, H = 1024;
+// Draws ocean + continents + lat/lng grid onto a 4096×2048 canvas.
+function buildMapTexture(polygons) {
+  const W = MAP_WIDTH, H = MAP_HEIGHT;
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
 
   // ── Ocean base ──
-  ctx.fillStyle = '#eceae7';
+  ctx.fillStyle = '#f4f3f1';
   ctx.fillRect(0, 0, W, H);
 
   // ── Continents: trace all polygons in one batched fill ──
   ctx.fillStyle = '#bebcb8';
   ctx.beginPath();
-  for (const poly of LAND_POLYGONS) {
+  for (const poly of polygons) {
     poly.forEach(([lng, lat], i) => {
       const x = ((lng + 180) / 360) * W;
       const y = ((90  - lat) / 180) * H;
@@ -236,13 +238,13 @@ function buildMapTexture() {
   ctx.fill('evenodd');
 
   // ── Latitude / longitude grid ──
-  ctx.strokeStyle = 'rgba(148, 145, 140, 0.30)';
-  ctx.lineWidth   = 1.0;
-  for (let lat = -80; lat <= 80; lat += 20) {
+  ctx.strokeStyle = 'rgba(143, 140, 136, 0.22)';
+  ctx.lineWidth   = 0.9;
+  for (let lat = -80; lat <= 80; lat += 15) {
     const y = ((90 - lat) / 180) * H;
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
-  for (let lng = -160; lng <= 160; lng += 20) {
+  for (let lng = -165; lng <= 165; lng += 15) {
     const x = ((lng + 180) / 360) * W;
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
   }
@@ -253,7 +255,37 @@ function buildMapTexture() {
 
   const tex = new THREE.CanvasTexture(cv);
   tex.needsUpdate = true;
+  tex.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
   return tex;
+}
+
+function loadWorldTextureWithFallback() {
+  const loader = new THREE.TextureLoader();
+  loader.setCrossOrigin('anonymous');
+
+  loader.load(
+    WORLD_TEXTURE_URL,
+    (texture) => {
+      texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+      texture.needsUpdate = true;
+      applyTextureToGlobe(texture);
+      console.log('texture load success');
+    },
+    undefined,
+    () => {
+      console.log('texture load fail');
+      const fallbackTex = buildMapTexture(FALLBACK_LAND_POLYGONS);
+      applyTextureToGlobe(fallbackTex);
+    },
+  );
+}
+
+function applyTextureToGlobe(texture) {
+  if (!globeMesh || !globeMaterial) return;
+  globeMaterial.map = texture;
+  globeMaterial.needsUpdate = true;
+  globeMesh.material = globeMaterial;
+  globeMesh.material.needsUpdate = true;
 }
 
 // (Dead code kept as stub so nothing breaks if called externally)
