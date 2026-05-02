@@ -10,6 +10,40 @@ const MIN_ZOOM = 3.8;
 const MAX_ZOOM = 10;
 const STORAGE_KEY = 'globe-archive-v1';
 
+// ── Location Dataset (30 major travel cities) ──────────────
+const LOCATIONS = [
+  { city: 'Seoul',         country: 'South Korea',   lat:  37.5665, lng:  126.9780 },
+  { city: 'Tokyo',         country: 'Japan',          lat:  35.6762, lng:  139.6503 },
+  { city: 'Paris',         country: 'France',         lat:  48.8566, lng:    2.3522 },
+  { city: 'London',        country: 'United Kingdom', lat:  51.5074, lng:   -0.1278 },
+  { city: 'New York',      country: 'United States',  lat:  40.7128, lng:  -74.0060 },
+  { city: 'Shanghai',      country: 'China',          lat:  31.2304, lng:  121.4737 },
+  { city: 'Beijing',       country: 'China',          lat:  39.9042, lng:  116.4074 },
+  { city: 'Hong Kong',     country: 'China',          lat:  22.3193, lng:  114.1694 },
+  { city: 'Taipei',        country: 'Taiwan',         lat:  25.0330, lng:  121.5654 },
+  { city: 'Bangkok',       country: 'Thailand',       lat:  13.7563, lng:  100.5018 },
+  { city: 'Singapore',     country: 'Singapore',      lat:   1.3521, lng:  103.8198 },
+  { city: 'Sydney',        country: 'Australia',      lat: -33.8688, lng:  151.2093 },
+  { city: 'Melbourne',     country: 'Australia',      lat: -37.8136, lng:  144.9631 },
+  { city: 'Stockholm',     country: 'Sweden',         lat:  59.3293, lng:   18.0686 },
+  { city: 'Copenhagen',    country: 'Denmark',        lat:  55.6761, lng:   12.5683 },
+  { city: 'Malmö',         country: 'Sweden',         lat:  55.6050, lng:   13.0038 },
+  { city: 'Berlin',        country: 'Germany',        lat:  52.5200, lng:   13.4050 },
+  { city: 'Amsterdam',     country: 'Netherlands',    lat:  52.3676, lng:    4.9041 },
+  { city: 'Rome',          country: 'Italy',          lat:  41.9028, lng:   12.4964 },
+  { city: 'Milan',         country: 'Italy',          lat:  45.4654, lng:    9.1859 },
+  { city: 'Barcelona',     country: 'Spain',          lat:  41.3851, lng:    2.1734 },
+  { city: 'Madrid',        country: 'Spain',          lat:  40.4168, lng:   -3.7038 },
+  { city: 'Vienna',        country: 'Austria',        lat:  48.2082, lng:   16.3738 },
+  { city: 'Prague',        country: 'Czech Republic', lat:  50.0755, lng:   14.4378 },
+  { city: 'Zurich',        country: 'Switzerland',    lat:  47.3769, lng:    8.5417 },
+  { city: 'Reykjavik',     country: 'Iceland',        lat:  64.1466, lng:  -21.9426 },
+  { city: 'Los Angeles',   country: 'United States',  lat:  34.0522, lng: -118.2437 },
+  { city: 'San Francisco', country: 'United States',  lat:  37.7749, lng: -122.4194 },
+  { city: 'Vancouver',     country: 'Canada',         lat:  49.2827, lng: -123.1207 },
+  { city: 'Cape Town',     country: 'South Africa',   lat: -33.9249, lng:   18.4241 },
+];
+
 // ── State ──────────────────────────────────────────────────
 let scene, camera, renderer, cssRenderer, globeGroup;
 let isDragging = false;
@@ -19,6 +53,7 @@ let photos = [];                          // all stored photo objects
 let photoObjects = [];                    // THREE.CSS2DObject refs
 let pendingFiles = [];                    // files selected but not saved
 let lightboxPhotoId = null;              // currently open photo id
+let selectedLocation = null;             // confirmed location from dropdown
 
 // ── Entry Point ────────────────────────────────────────────
 function init() {
@@ -208,6 +243,8 @@ function setupControls() {
   document.getElementById('lightbox-overlay').addEventListener('click', closeLightbox);
   document.getElementById('lightbox-close').addEventListener('click', closeLightbox);
   document.getElementById('lightbox-delete').addEventListener('click', handleDelete);
+
+  initLocationSearch();
 }
 
 function pinchDist(e) {
@@ -291,22 +328,139 @@ function clusterOffset(indexAtLocation) {
   };
 }
 
-// ── Geocoding ──────────────────────────────────────────────
-// Uses OpenStreetMap Nominatim — free, no API key required.
-async function geocode(query) {
-  try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1&accept-language=en`;
-    const res  = await fetch(url);
-    const data = await res.json();
-    if (data.length > 0) {
-      return {
-        lat:         parseFloat(data[0].lat),
-        lng:         parseFloat(data[0].lon),
-        displayName: data[0].display_name.split(',')[0].trim(),
-      };
+// ── Location Search Dropdown ───────────────────────────────
+function initLocationSearch() {
+  const input    = document.getElementById('location-input');
+  const dropdown = document.getElementById('location-dropdown');
+
+  // Open dropdown on focus
+  input.addEventListener('focus', () => {
+    renderDropdown(input.value.trim());
+    dropdown.classList.remove('hidden');
+  });
+
+  // Filter list as user types; typing clears any confirmed selection
+  input.addEventListener('input', () => {
+    if (selectedLocation) {
+      selectedLocation = null;
+      input.classList.remove('is-selected');
+      document.getElementById('loc-check').classList.remove('visible');
     }
-  } catch (_) { /* network error — handled by caller */ }
-  return null;
+    renderDropdown(input.value.trim());
+    dropdown.classList.remove('hidden');
+  });
+
+  // Arrow-key navigation + Enter to pick first result
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      dropdown.classList.add('hidden');
+      input.blur();
+    }
+    if (e.key === 'Enter') {
+      const first = dropdown.querySelector('.dropdown-item');
+      if (first) first.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const items = [...dropdown.querySelectorAll('.dropdown-item')];
+      if (items.length) items[0].focus();
+    }
+  });
+
+  // Close when clicking outside the panel
+  document.addEventListener('mousedown', (e) => {
+    if (!e.target.closest('#upload-panel')) {
+      dropdown.classList.add('hidden');
+    }
+  });
+}
+
+// Build and inject dropdown content based on current query string.
+function renderDropdown(query) {
+  // ── Recent section ──
+  // Unique cities the user has already added (matched against LOCATIONS)
+  const recentSection = document.getElementById('recent-section');
+  const recentList    = document.getElementById('recent-list');
+  const seen = new Set();
+  const recentLocs = [];
+  [...photos].reverse().forEach(p => {
+    const key = `${Math.round(p.lat)},${Math.round(p.lng)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const match = LOCATIONS.find(l =>
+      Math.abs(l.lat - p.lat) < 1.2 && Math.abs(l.lng - p.lng) < 1.2
+    );
+    if (match && recentLocs.length < 4) recentLocs.push(match);
+  });
+
+  if (!query && recentLocs.length > 0) {
+    recentSection.style.display = '';
+    recentList.innerHTML = recentLocs.map(itemHTML).join('');
+    attachItemListeners(recentList);
+  } else {
+    recentSection.style.display = 'none';
+  }
+
+  // ── Suggested / filtered section ──
+  const sugSection = document.getElementById('suggested-section');
+  const sugLabel   = sugSection.querySelector('.dropdown-section-label');
+  const sugList    = document.getElementById('suggested-list');
+
+  let results;
+  if (!query) {
+    sugLabel.textContent = 'SUGGESTED';
+    results = LOCATIONS;
+  } else {
+    sugLabel.textContent = 'RESULTS';
+    const q = query.toLowerCase();
+    results = LOCATIONS.filter(l =>
+      l.city.toLowerCase().includes(q) || l.country.toLowerCase().includes(q)
+    );
+  }
+
+  if (results.length === 0) {
+    sugList.innerHTML = '<div class="dropdown-empty">일치하는 도시가 없습니다</div>';
+  } else {
+    sugList.innerHTML = results.map(itemHTML).join('');
+    attachItemListeners(sugList);
+  }
+}
+
+function itemHTML(loc) {
+  return `<div class="dropdown-item" tabindex="0"
+    data-city="${loc.city}" data-country="${loc.country}">
+    <span class="item-city">${loc.city}</span>
+    <span class="item-country">${loc.country}</span>
+  </div>`;
+}
+
+function attachItemListeners(container) {
+  container.querySelectorAll('.dropdown-item').forEach(item => {
+    // mousedown fires before the input's blur, preserving focus flow
+    item.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const loc = LOCATIONS.find(
+        l => l.city === item.dataset.city && l.country === item.dataset.country
+      );
+      if (loc) confirmLocation(loc);
+    });
+    // keyboard: Enter / Space on focused item
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        item.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      }
+    });
+  });
+}
+
+function confirmLocation(loc) {
+  selectedLocation = loc;
+  const input = document.getElementById('location-input');
+  input.value = `${loc.city}, ${loc.country}`;
+  input.classList.add('is-selected');
+  document.getElementById('loc-check').classList.add('visible');
+  document.getElementById('location-dropdown').classList.add('hidden');
 }
 
 // ── Image Utilities ────────────────────────────────────────
@@ -356,28 +510,27 @@ function handleFileSelect(e) {
 }
 
 async function handleSave() {
-  const locationInput = document.getElementById('location-input');
-  const query = locationInput.value.trim();
-
-  if (!query)             return showToast('도시 또는 나라 이름을 입력해주세요');
+  if (!selectedLocation) {
+    showToast('Please select a location from the list.');
+    // Re-open the dropdown so the user can pick
+    const input = document.getElementById('location-input');
+    renderDropdown(input.value.trim());
+    document.getElementById('location-dropdown').classList.remove('hidden');
+    input.focus();
+    return;
+  }
   if (!pendingFiles.length) return showToast('사진을 선택해주세요');
 
   const btn = document.getElementById('save-btn');
-  btn.textContent = '위치 검색 중…';
+  btn.textContent = '저장 중…';
   btn.disabled = true;
 
-  const geo = await geocode(query);
-  if (!geo) {
-    showToast('위치를 찾을 수 없어요. 다른 이름으로 시도해보세요');
-    btn.textContent = '저장'; btn.disabled = false;
-    return;
-  }
+  const locationLabel = `${selectedLocation.city}, ${selectedLocation.country}`;
 
-  btn.textContent = '저장 중…';
-
-  // Count how many photos already exist near this location (for cluster offset)
+  // Count existing photos near this location for the cluster spiral
   const existingCount = photos.filter(p =>
-    Math.abs(p.lat - geo.lat) < 1.5 && Math.abs(p.lng - geo.lng) < 1.5
+    Math.abs(p.lat - selectedLocation.lat) < 1.5 &&
+    Math.abs(p.lng - selectedLocation.lng) < 1.5
   ).length;
 
   const today = new Date().toLocaleDateString('ko-KR', {
@@ -385,20 +538,20 @@ async function handleSave() {
   });
 
   for (let i = 0; i < pendingFiles.length; i++) {
-    const raw      = await readFile(pendingFiles[i]);
+    const raw       = await readFile(pendingFiles[i]);
     const imageData = await resizeImage(raw);
-    const offset   = clusterOffset(existingCount + i);
+    const offset    = clusterOffset(existingCount + i);
 
     const photo = {
-      id:       `${Date.now()}-${i}`,
-      location: query,
-      displayName: geo.displayName,
-      lat: geo.lat,
-      lng: geo.lng,
+      id:          `${Date.now()}-${i}`,
+      location:    locationLabel,
+      displayName: selectedLocation.city,
+      lat:         selectedLocation.lat,
+      lng:         selectedLocation.lng,
       imageData,
-      date: today,
-      offLat: offset.offLat,
-      offLng: offset.offLng,
+      date:        today,
+      offLat:      offset.offLat,
+      offLng:      offset.offLng,
     };
 
     photos.push(photo);
@@ -407,11 +560,15 @@ async function handleSave() {
 
   saveToStorage();
   updateCounter();
-  flyTo(geo.lat, geo.lng);
-  showToast(`${query}에 ${pendingFiles.length}장 저장됨`);
+  flyTo(selectedLocation.lat, selectedLocation.lng);
+  showToast(`${locationLabel}에 ${pendingFiles.length}장 저장됨`);
 
-  // Reset form
-  locationInput.value = '';
+  // Reset form state
+  const input = document.getElementById('location-input');
+  input.value = '';
+  input.classList.remove('is-selected');
+  document.getElementById('loc-check').classList.remove('visible');
+  selectedLocation = null;
   pendingFiles = [];
   document.getElementById('file-input').value = '';
   document.getElementById('preview-container').innerHTML = '';

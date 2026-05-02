@@ -23,17 +23,34 @@
 
     <!-- Upload Panel (bottom-center) -->
     <div id="upload-panel">
+
+      <!-- Location Dropdown — floats above the panel -->
+      <div id="location-dropdown" class="hidden">
+        <div class="dropdown-section" id="recent-section">
+          <div class="dropdown-section-label">RECENT</div>
+          <div class="dropdown-list" id="recent-list"></div>
+        </div>
+        <div class="dropdown-section" id="suggested-section">
+          <div class="dropdown-section-label">SUGGESTED</div>
+          <div class="dropdown-list" id="suggested-list"></div>
+        </div>
+      </div>
+
       <div id="panel-header">
         <span class="label">ADD MEMORY</span>
       </div>
       <div id="panel-form">
-        <input
-          type="text"
-          id="location-input"
-          placeholder="도시 또는 나라 (예: Tokyo, Iceland)"
-          autocomplete="off"
-          spellcheck="false"
-        >
+        <!-- Location search wrapper -->
+        <div id="location-wrapper">
+          <input
+            type="text"
+            id="location-input"
+            placeholder="도시 검색 (예: Tokyo, Paris…)"
+            autocomplete="off"
+            spellcheck="false"
+          >
+          <span id="loc-check" class="location-checkmark">✓</span>
+        </div>
         <div id="upload-area">
           <input type="file" id="file-input" accept="image/*" multiple>
           <label for="file-input" id="file-label">사진 선택</label>
