@@ -54,6 +54,7 @@ let photoObjects = [];                    // THREE.CSS2DObject refs
 let pendingFiles = [];                    // files selected but not saved
 let lightboxPhotoId = null;              // currently open photo id
 let selectedLocation = null;             // confirmed location from dropdown
+let globeMaterial  = null;               // ref so async texture can update it
 
 // ── Entry Point ────────────────────────────────────────────
 function init() {
@@ -117,30 +118,17 @@ function setupScene() {
 function createGlobe() {
   const geo = new THREE.SphereGeometry(GLOBE_RADIUS, 72, 72);
 
-  // Attempt to load a grayscale Earth bump map for subtle continent detail.
-  // Falls back to a flat-shaded gray sphere if the texture can't be fetched.
-  const loader = new THREE.TextureLoader();
-  const mat = new THREE.MeshPhongMaterial({
-    color: 0xcfcfcc,
-    specular: 0x787870,
-    shininess: 6,
+  // Start with a neutral gray; color is set to white once the map texture loads
+  // so the texture values are not tinted.
+  globeMaterial = new THREE.MeshPhongMaterial({
+    color: 0xd8d8d5,
+    specular: 0x686864,
+    shininess: 5,
   });
 
-  loader.load(
-    'https://unpkg.com/three@0.128.0/examples/textures/planets/earth_normal_2048.jpg',
-    (tex) => {
-      mat.bumpMap = tex;
-      mat.bumpScale = 0.018;
-      mat.needsUpdate = true;
-    },
-    undefined,
-    () => { /* texture load failed — use flat gray, that's fine */ }
-  );
+  globeGroup.add(new THREE.Mesh(geo, globeMaterial));
 
-  const sphere = new THREE.Mesh(geo, mat);
-  globeGroup.add(sphere);
-
-  // Thin atmosphere halo: a slightly larger back-face sphere, semi-transparent
+  // Atmosphere halo
   const haloGeo = new THREE.SphereGeometry(GLOBE_RADIUS * 1.045, 64, 64);
   const haloMat = new THREE.MeshPhongMaterial({
     color: 0xddddd8,
@@ -150,6 +138,80 @@ function createGlobe() {
     depthWrite: false,
   });
   globeGroup.add(new THREE.Mesh(haloGeo, haloMat));
+
+  // Kick off async texture load — globe shows as plain gray in the meantime
+  applyMapTexture();
+}
+
+// Builds the world-map canvas texture and applies it to the globe material.
+async function applyMapTexture() {
+  try {
+    const texture = await buildWorldTexture();
+    globeMaterial.map   = texture;
+    globeMaterial.color.set(0xffffff); // let the texture drive the color
+    globeMaterial.needsUpdate = true;
+  } catch (_) { /* network error — keep plain gray sphere */ }
+}
+
+// Fetches Natural Earth 110m TopoJSON and draws an equirectangular world map
+// onto a 2048×1024 canvas: ocean base → continent fill → lat/lng grid.
+async function buildWorldTexture() {
+  const W = 2048, H = 1024;
+  const cv  = document.createElement('canvas');
+  cv.width  = W;
+  cv.height = H;
+  const ctx = cv.getContext('2d');
+
+  // Ocean
+  ctx.fillStyle = '#eceae7';
+  ctx.fillRect(0, 0, W, H);
+
+  // Fetch world topology
+  const res = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
+  if (!res.ok) throw new Error('world-atlas fetch failed');
+  const world = await res.json();
+
+  // Convert TopoJSON land object to GeoJSON and batch-draw all continent polygons
+  const landGeo  = topojson.feature(world, world.objects.land);
+  const features = landGeo.features || [landGeo]; // FeatureCollection or single Feature
+
+  ctx.fillStyle = '#bebcb8';
+  ctx.beginPath();
+  features.forEach(f => { if (f && f.geometry) traceGeoPath(ctx, f.geometry, W, H); });
+  ctx.fill('evenodd');
+
+  // Latitude parallels (every 20°, skip poles)
+  ctx.strokeStyle = 'rgba(155, 152, 147, 0.30)';
+  ctx.lineWidth   = 1.0;
+  for (let lat = -80; lat <= 80; lat += 20) {
+    const y = ((90 - lat) / 180) * H;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  // Longitude meridians (every 20°; skip the ±180 seam duplicate)
+  for (let lng = -160; lng <= 160; lng += 20) {
+    const x = ((lng + 180) / 360) * W;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// Traces a GeoJSON Polygon or MultiPolygon geometry into the active canvas path.
+// Equirectangular projection: u = (lng+180)/360, v = (90-lat)/180.
+function traceGeoPath(ctx, geom, W, H) {
+  function ring(coords) {
+    coords.forEach(([lng, lat], i) => {
+      const x = ((lng + 180) / 360) * W;
+      const y = ((90 - lat)  / 180) * H;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+  }
+  if      (geom.type === 'Polygon')      geom.coordinates.forEach(ring);
+  else if (geom.type === 'MultiPolygon') geom.coordinates.forEach(p => p.forEach(ring));
 }
 
 // ── Lighting ───────────────────────────────────────────────
