@@ -640,7 +640,7 @@ async function handleSave() {
   if (!pendingFiles.length) return showToast('사진을 선택해주세요');
 
   const btn = document.getElementById('save-btn');
-  btn.textContent = '저장 중…';
+  btn.textContent = 'Uploading…';
   btn.disabled = true;
 
   const locationLabel = `${selectedLocation.city}, ${selectedLocation.country}`;
@@ -690,7 +690,7 @@ async function handleSave() {
   pendingFiles = [];
   document.getElementById('file-input').value = '';
   document.getElementById('preview-container').innerHTML = '';
-  btn.textContent = '저장'; btn.disabled = false;
+  btn.textContent = 'Upload'; btn.disabled = false;
 }
 
 function handleDelete() {
