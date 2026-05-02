@@ -44,6 +44,76 @@ const LOCATIONS = [
   { city: 'Cape Town',     country: 'South Africa',   lat: -33.9249, lng:   18.4241 },
 ];
 
+// ── Land Polygon Data ──────────────────────────────────────
+// Simplified continental outlines as [lng, lat] arrays.
+// Embedded directly so the texture works offline / file:// with zero CDN deps.
+const LAND_POLYGONS = [
+  // Africa
+  [[-6,36],[10,37],[25,32],[35,30],[38,22],[43,12],[51,11],
+   [43,-2],[40,-5],[38,-18],[36,-25],[28,-35],[18,-35],[12,-34],
+   [18,-30],[12,-18],[9,-5],[9,4],[3,5],[-5,5],[-16,12],[-17,14],[-6,36]],
+  // Europe + Scandinavia
+  [[-5,36],[5,36],[10,37],[18,38],[22,38],[26,40],[30,44],[30,48],
+   [24,56],[14,57],[10,57],[10,58],[14,58],[20,60],[22,64],[26,70],[28,71],
+   [14,71],[5,68],[-2,62],[-6,58],[-8,52],[-5,48],[-2,48],[2,52],
+   [-4,44],[-9,44],[-9,38],[-5,36]],
+  // Asia (main body + Arabia + Siberia)
+  [[26,41],[40,42],[50,43],[60,37],[65,38],[72,42],[80,44],[90,50],
+   [100,55],[110,62],[105,72],[120,72],[140,72],[150,68],[160,60],
+   [168,54],[155,52],[148,44],[145,35],[140,42],[130,32],[125,22],
+   [118,22],[115,8],[110,2],[105,5],[100,10],[97,3],[98,20],[96,25],
+   [80,25],[72,22],[62,22],[55,24],[50,24],[44,16],[40,36],[36,36],[26,41]],
+  // Indian Subcontinent
+  [[66,22],[80,20],[88,22],[96,25],[96,22],[85,20],[80,14],
+   [76,8],[72,8],[66,14],[60,22],[66,22]],
+  // North America
+  [[-168,64],[-163,71],[-155,75],[-130,70],[-100,74],[-80,73],
+   [-65,68],[-52,47],[-65,44],[-70,44],[-82,42],[-82,30],[-80,25],
+   [-88,16],[-83,10],[-77,8],[-95,20],[-110,24],[-117,33],
+   [-124,48],[-132,55],[-140,60],[-150,60],[-160,60],[-168,64]],
+  // South America
+  [[-62,12],[-52,4],[-44,-3],[-35,-8],[-40,-20],[-43,-23],
+   [-52,-33],[-65,-55],[-72,-50],[-72,-38],[-70,-20],[-75,-10],
+   [-80,-2],[-78,2],[-72,12],[-62,12]],
+  // Australia
+  [[114,-22],[122,-14],[128,-14],[136,-12],[140,-18],[148,-22],
+   [154,-26],[153,-34],[148,-38],[144,-40],[138,-36],[130,-32],[116,-34],[114,-22]],
+  // Greenland
+  [[-73,83],[-20,83],[-18,76],[-22,70],[-44,60],[-56,62],[-58,70],[-68,80],[-73,83]],
+  // Antarctica
+  [[-180,-65],[-150,-68],[-100,-65],[-60,-70],[0,-68],
+   [60,-70],[100,-65],[150,-68],[180,-65],[180,-90],[-180,-90]],
+  // Great Britain
+  [[-6,50],[2,51],[2,54],[0,58],[-3,60],[-5,58],[-8,52],[-6,50]],
+  // Ireland
+  [[-10,52],[-6,51],[-6,54],[-8,55],[-10,54],[-10,52]],
+  // Iceland
+  [[-24,64],[-13,64],[-14,66],[-22,66],[-24,64]],
+  // Japan (Honshu + Kyushu)
+  [[130,31],[132,34],[136,36],[138,36],[141,38],[141,40],
+   [140,42],[141,44],[140,44],[139,36],[136,35],[132,33],[130,31]],
+  // Hokkaido
+  [[140,42],[142,44],[144,44],[145,44],[144,42],[141,42],[140,42]],
+  // Sumatra
+  [[95,5],[100,4],[105,2],[106,0],[105,-2],[103,-4],[100,-2],[98,2],[95,5]],
+  // Borneo
+  [[108,2],[112,2],[116,4],[118,2],[118,0],[116,-2],[114,-4],[110,-4],[108,-2],[108,2]],
+  // Papua New Guinea
+  [[132,-2],[135,-6],[140,-6],[145,-5],[150,-10],[148,-10],[143,-8],[138,-6],[132,-2]],
+  // New Zealand (South Island)
+  [[166,-46],[168,-44],[172,-43],[174,-40],[172,-44],[170,-46],[166,-46]],
+  // Madagascar
+  [[44,-13],[50,-16],[50,-24],[44,-25],[44,-16],[44,-13]],
+  // Philippines
+  [[118,18],[122,18],[124,12],[126,8],[124,8],[120,10],[118,14],[118,18]],
+  // Sri Lanka
+  [[80,10],[81,9],[82,7],[80,6],[80,10]],
+  // Taiwan
+  [[120,25],[121,22],[120,22],[121,25]],
+  // Cuba
+  [[-84,22],[-77,20],[-74,20],[-74,22],[-78,23],[-84,23],[-84,22]],
+];
+
 // ── State ──────────────────────────────────────────────────
 let scene, camera, renderer, cssRenderer, globeGroup;
 let isDragging = false;
@@ -118,12 +188,12 @@ function setupScene() {
 function createGlobe() {
   const geo = new THREE.SphereGeometry(GLOBE_RADIUS, 72, 72);
 
-  // Start with a neutral gray; color is set to white once the map texture loads
-  // so the texture values are not tinted.
+  // Build map texture synchronously from embedded polygon data — no network needed.
   globeMaterial = new THREE.MeshPhongMaterial({
-    color: 0xd8d8d5,
+    color:    0xffffff, // neutral white so texture colors render as-is
     specular: 0x686864,
     shininess: 5,
+    map: buildMapTexture(),
   });
 
   globeGroup.add(new THREE.Mesh(geo, globeMaterial));
@@ -138,69 +208,55 @@ function createGlobe() {
     depthWrite: false,
   });
   globeGroup.add(new THREE.Mesh(haloGeo, haloMat));
-
-  // Kick off async texture load — globe shows as plain gray in the meantime
-  applyMapTexture();
 }
 
-// Builds the world-map canvas texture and applies it to the globe material.
-async function applyMapTexture() {
-  try {
-    const texture = await buildWorldTexture();
-    globeMaterial.map   = texture;
-    globeMaterial.color.set(0xffffff); // let the texture drive the color
-    globeMaterial.needsUpdate = true;
-  } catch (_) { /* network error — keep plain gray sphere */ }
-}
-
-// Fetches Natural Earth 110m TopoJSON and draws an equirectangular world map
-// onto a 2048×1024 canvas: ocean base → continent fill → lat/lng grid.
-async function buildWorldTexture() {
+// Draws ocean + continents + lat/lng grid onto a 2048×1024 canvas and returns
+// a THREE.CanvasTexture. Fully synchronous — works offline and from file://.
+function buildMapTexture() {
   const W = 2048, H = 1024;
-  const cv  = document.createElement('canvas');
-  cv.width  = W;
-  cv.height = H;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
 
-  // Ocean
+  // ── Ocean base ──
   ctx.fillStyle = '#eceae7';
   ctx.fillRect(0, 0, W, H);
 
-  // Fetch world topology
-  const res = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
-  if (!res.ok) throw new Error('world-atlas fetch failed');
-  const world = await res.json();
-
-  // Convert TopoJSON land object to GeoJSON and batch-draw all continent polygons
-  const landGeo  = topojson.feature(world, world.objects.land);
-  const features = landGeo.features || [landGeo]; // FeatureCollection or single Feature
-
+  // ── Continents: trace all polygons in one batched fill ──
   ctx.fillStyle = '#bebcb8';
   ctx.beginPath();
-  features.forEach(f => { if (f && f.geometry) traceGeoPath(ctx, f.geometry, W, H); });
+  for (const poly of LAND_POLYGONS) {
+    poly.forEach(([lng, lat], i) => {
+      const x = ((lng + 180) / 360) * W;
+      const y = ((90  - lat) / 180) * H;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+  }
   ctx.fill('evenodd');
 
-  // Latitude parallels (every 20°, skip poles)
-  ctx.strokeStyle = 'rgba(155, 152, 147, 0.30)';
+  // ── Latitude / longitude grid ──
+  ctx.strokeStyle = 'rgba(148, 145, 140, 0.30)';
   ctx.lineWidth   = 1.0;
   for (let lat = -80; lat <= 80; lat += 20) {
     const y = ((90 - lat) / 180) * H;
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
-
-  // Longitude meridians (every 20°; skip the ±180 seam duplicate)
   for (let lng = -160; lng <= 160; lng += 20) {
     const x = ((lng + 180) / 360) * W;
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
   }
+  // Anti-meridian lines at ±180
+  [0, W].forEach(x => {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  });
 
   const tex = new THREE.CanvasTexture(cv);
   tex.needsUpdate = true;
   return tex;
 }
 
-// Traces a GeoJSON Polygon or MultiPolygon geometry into the active canvas path.
-// Equirectangular projection: u = (lng+180)/360, v = (90-lat)/180.
+// (Dead code kept as stub so nothing breaks if called externally)
 function traceGeoPath(ctx, geom, W, H) {
   function ring(coords) {
     coords.forEach(([lng, lat], i) => {
