@@ -266,8 +266,7 @@ function loadWorldTextureWithFallback() {
   loader.load(
     WORLD_TEXTURE_URL,
     (texture) => {
-      texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
-      texture.needsUpdate = true;
+      configureGlobeTexture(texture);
       applyTextureToGlobe(texture);
       console.log('texture load success');
     },
@@ -275,9 +274,17 @@ function loadWorldTextureWithFallback() {
     () => {
       console.log('texture load fail');
       const fallbackTex = buildMapTexture(FALLBACK_LAND_POLYGONS);
+      configureGlobeTexture(fallbackTex);
       applyTextureToGlobe(fallbackTex);
     },
   );
+}
+
+function configureGlobeTexture(texture) {
+  texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
 }
 
 function applyTextureToGlobe(texture) {
